@@ -88,6 +88,11 @@ def is_excluded(path: str, exclude_patterns: List[str] = None) -> bool:
         return False
 
     try:
+        # The spec is rebuilt from the patterns on every single call,
+        # once per entry per walk, and the path tested is the full
+        # joined path starting with the scan root, not a path relative
+        # to it. An anchored pattern like temp_dir/* therefore never
+        # matches the entries a user expects it to exclude.
         spec = pathspec.PathSpec.from_lines('gitwildmatch', exclude_patterns)
         return spec.match_file(path)
     except Exception as e:
@@ -112,6 +117,13 @@ def get_file_permissions(filepath: str) -> str:
         return perms
     except OSError as e:
         logging.error(f"Error getting permissions for {filepath}: {e}")
+        # The caller counts this placeholder as if it were a real
+        # permission string, so unreadable entries and broken symlinks
+        # pool into a --------- bucket that can itself be reported as
+        # the anomaly. Also note the string built above carries only
+        # the nine rwx bits: file type and the suid, sgid, and sticky
+        # bits never reach the counts, and files and directories with
+        # the same nine bits count together.
         return "---------"
 
 def analyze_permissions(directory: str, exclude_patterns: List[str] = None) -> Dict[str, int]:
@@ -169,6 +181,10 @@ def detect_anomalies(
         baseline_prob = baseline_permissions.get(perm, 0) / total_baseline_count if total_baseline_count > 0 else 0
         expected_scan_count = baseline_prob * sum(scan_permissions.values())
 
+        # The loop only visits strings the scan produced, so a common
+        # baseline permission that vanished from the tree is never
+        # flagged: disappearance is invisible to this test. The other
+        # direction is absolute, as the else branch below shows.
         # Calculate Z-score
         if expected_scan_count > 0:
             z_score = (scan_count - expected_scan_count) / (expected_scan_count**0.5)
@@ -321,6 +337,8 @@ def main():
 
     suid_sgid_files = []
     if args.check_suid_sgid:
+        # A second full walk of the same tree, statting everything
+        # again, instead of collecting the bits during the first walk.
         suid_sgid_files = check_suid_sgid(args.directory, args.exclude)
 
     # Output results
