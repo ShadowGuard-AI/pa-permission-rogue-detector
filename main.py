@@ -118,11 +118,12 @@ def analyze_permissions(directory: str, exclude_patterns: List[str] = None) -> D
     """Analyzes permissions in a directory, counting occurrences of each permission string."""
     permission_counts = defaultdict(int)
     try:
-        for root, _, files in os.walk(directory):
-            for file in files:
-                filepath = os.path.join(root, file)
+        for root, dirs, files in os.walk(directory):
+            entries = [os.path.join(root, name) for name in dirs]
+            entries += [os.path.join(root, name) for name in files]
+            for filepath in entries:
                 if is_excluded(filepath, exclude_patterns):
-                    logging.debug(f"Skipping excluded file: {filepath}")
+                    logging.debug(f"Skipping excluded entry: {filepath}")
                     continue
                 perms = get_file_permissions(filepath)
                 permission_counts[perms] += 1
@@ -184,8 +185,8 @@ def check_suid_sgid(directory: str, exclude_patterns: List[str] = None) -> List[
     """Checks for SUID/SGID bits set on files."""
     suid_sgid_files = []
     try:
-        for root, _, files in os.walk(directory):
-            for file in files:
+        for root, dirs, files in os.walk(directory):
+            for file in list(dirs) + list(files):
                 filepath = os.path.join(root, file)
                 if is_excluded(filepath, exclude_patterns):
                     continue
@@ -205,9 +206,12 @@ def output_results(
     suid_sgid_files: List[str],
     output_file: str = None,
     no_color: bool = False,
-):
-    """Outputs the results to the console and optionally to a file."""
+    anomaly_check_ran: bool = True,
+    suid_check_ran: bool = True,
+) -> bool:
+    """Outputs the results to the console and optionally to a file. Returns False when a requested write failed."""
     console = Console(no_color=no_color)
+    write_ok = True
 
     # Anomalies Table
     if anomalies:
@@ -229,6 +233,7 @@ def output_results(
                         f.write(f"Permission: {perm}, Count: {count}, Z-Score: {z_score:.2f}\n")
             except IOError as e:
                 logging.error(f"Error writing to output file: {e}")
+                write_ok = False
 
 
     # SUID/SGID Files List
@@ -245,14 +250,27 @@ def output_results(
                         f.write(f"{filepath}\n")
             except IOError as e:
                 logging.error(f"Error writing to output file: {e}")
+                write_ok = False
     elif not anomalies:
-        console.print("[green]No anomalies or SUID/SGID files found.[/]")
+        if anomaly_check_ran and suid_check_ran:
+            verdict = "No anomalies or SUID/SGID files found."
+        elif anomaly_check_ran:
+            verdict = "No anomalies found. SUID/SGID check was not run."
+        elif suid_check_ran:
+            verdict = "No SUID/SGID files found. Anomaly detection was not run (no baseline provided)."
+        else:
+            verdict = "Nothing was checked: no baseline was provided and the SUID/SGID check was not run."
+        console.print(f"[green]{verdict}[/]")
         if output_file:
             try:
                 with open(output_file, "w") as f:
-                    f.write("No anomalies or SUID/SGID files found.\n")
+                    f.write(verdict + "\n")
             except IOError as e:
                 logging.error(f"Error writing to output file: {e}")
+                write_ok = False
+    if not write_ok:
+        print("Report not saved: writing the output file failed.")
+    return write_ok
 
 
 def main():
@@ -272,8 +290,23 @@ def main():
         logging.error("Error: Threshold must be a positive number.")
         sys.exit(1)
 
+    if args.output and args.baseline and os.path.realpath(args.output) == os.path.realpath(args.baseline):
+        logging.error("Error: Output file must not overwrite the baseline file.")
+        print("Error: Output file must not overwrite the baseline file.")
+        sys.exit(1)
+
+    if not args.baseline and not args.check_suid_sgid:
+        print("Nothing was checked: no baseline was provided and the SUID/SGID check was not run.")
+        logging.error("Nothing was checked: provide a baseline or the SUID/SGID flag.")
+        sys.exit(1)
+
     # Perform analysis
     scan_permissions = analyze_permissions(args.directory, args.exclude)
+
+    if sum(scan_permissions.values()) == 0:
+        print("No files or directories scanned. Nothing was checked.")
+        logging.error("No files or directories scanned.")
+        sys.exit(1)
 
     if args.baseline:
         baseline_permissions = load_baseline_permissions(args.baseline)
@@ -291,7 +324,11 @@ def main():
         suid_sgid_files = check_suid_sgid(args.directory, args.exclude)
 
     # Output results
-    output_results(anomalies, suid_sgid_files, args.output, args.no_color)
+    saved = output_results(anomalies, suid_sgid_files, args.output, args.no_color,
+                           anomaly_check_ran=bool(args.baseline),
+                           suid_check_ran=bool(args.check_suid_sgid))
+    if not saved:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

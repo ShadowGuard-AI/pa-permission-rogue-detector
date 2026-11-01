@@ -1,5 +1,5 @@
 # pa-permission-rogue-detector
-Identifies permissions that deviate significantly from established organizational baselines or best practices. Uses statistical analysis and anomaly detection on permission assignments. - Focused on Tools for analyzing and assessing file system permissions
+Identifies permissions that deviate significantly from established organizational baselines or best practices. Uses statistical analysis and anomaly detection on permission assignments. The scan counts directories as well as files. A run with no baseline and without the SUID/SGID flag checks nothing and exits 1, a scan that finds no entries exits 1, and a failed report write exits 1. The output file must not overwrite the baseline file. - Focused on Tools for analyzing and assessing file system permissions
 
 ## Install
 `git clone https://github.com/ShadowGuardAI/pa-permission-rogue-detector`
